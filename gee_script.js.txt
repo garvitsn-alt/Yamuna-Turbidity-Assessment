@@ -1,0 +1,226 @@
+var geometry = 
+    /* color: #0b4a8b */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Feature(
+        ee.Geometry.MultiPolygon(
+            [[[[77.18591843780075, 28.98251129784351],
+               [77.18591843780075, 28.61787546227703],
+               [77.29166184600388, 28.61787546227703],
+               [77.29166184600388, 28.98251129784351]]],
+             [[[77.11848336862877, 29.22134578611802],
+               [77.11848336862877, 28.984964425219715],
+               [77.2132404487069, 28.984964425219715],
+               [77.2132404487069, 29.22134578611802]]],
+             [[[77.27091867136315, 28.609487192923574],
+               [77.27091867136315, 28.418827200857734],
+               [77.5483234565194, 28.418827200857734],
+               [77.5483234565194, 28.609487192923574]]],
+             [[[77.43571359323815, 28.421242770877083],
+               [77.43571359323815, 28.20725178922062],
+               [77.52360421823815, 28.20725178922062],
+               [77.52360421823815, 28.421242770877083]]],
+             [[[77.4384065527485, 28.201469044053464],
+               [77.4384065527485, 28.06583297332158],
+               [77.52767046876413, 28.06583297332158],
+               [77.52767046876413, 28.201469044053464]]]], null, false),
+        {
+          "system:index": "0"
+        });
+
+
+
+// 1. Study area
+
+var parts = geometry.geometries();
+var studyArea = geometry;
+var upstream2 = ee.Geometry(parts.get(0));
+var upstream1 = ee.Geometry(parts.get(1));
+var middle = ee.Geometry(parts.get(2));
+var downstream1 = ee.Geometry(parts.get(3));
+var downstream2 = ee.Geometry(parts.get(4));
+
+// 2. Load Sentinel-2
+var s2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(studyArea)
+  .filterDate('2025-01-01', '2025-12-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20));
+
+// 3. Create median image
+var image = s2.median().clip(studyArea);
+
+// 4. Calculate NDTI
+var ndti = image.normalizedDifference(['B4', 'B3']).rename('NDTI');
+
+// 5. Calculate NDWI for water mask
+var ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI');
+
+// 6. Create water mask
+var waterMask = ndwi.gt(0);
+
+// 7. Apply water mask
+var waterNDTI = ndti.updateMask(waterMask);
+
+// 8. Visualization
+var ndtiVis = {
+  min: -0.4,
+  max: 0.11,
+  palette: ['cyan', 'green', 'yellow', 'orange', 'red']
+};
+
+var hotspots = waterNDTI.gt(0.10);
+
+// 9. Show map
+Map.centerObject(studyArea, 11);
+
+Map.addLayer(image, {
+  bands: ['B4', 'B3', 'B2'],
+  min: 0,
+  max: 3000
+}, 'True Color Sentinel-2');
+
+Map.addLayer(waterNDTI, ndtiVis, 'Yamuna NDTI Turbidity');
+
+
+Map.addLayer(
+  hotspots,
+  {
+    palette:['red']
+  },
+  'Hotspots'
+);
+
+
+
+
+
+// 10. Function to calculate stats
+function calculateStats(region, name) {
+  var stats = waterNDTI.reduceRegion({
+    reducer: ee.Reducer.min()
+      .combine({
+        reducer2: ee.Reducer.max(),
+        sharedInputs: true
+      })
+      .combine({
+        reducer2: ee.Reducer.mean(),
+        sharedInputs: true
+      })
+      .combine({
+        reducer2: ee.Reducer.median(),
+        sharedInputs: true
+      }),
+    geometry: region,
+    scale: 10,
+    maxPixels: 1e13
+  });
+
+  print(name + ' NDTI Statistics:', stats);
+}
+
+// 11. Calculate stats for each stretch
+calculateStats(studyArea, 'Total Area');
+calculateStats(upstream2, 'Upstream2');
+calculateStats(upstream1, 'Upstream1');
+calculateStats(middle, 'Middle');
+calculateStats(downstream1, 'Downstream1');
+calculateStats(downstream2, 'Downstream2');
+
+// Create dynamic statistics Feature
+function makeStatsFeature(region, name) {
+  var stats = waterNDTI.reduceRegion({
+    reducer: ee.Reducer.min()
+      .combine({
+        reducer2: ee.Reducer.max(),
+        sharedInputs: true
+      })
+      .combine({
+        reducer2: ee.Reducer.mean(),
+        sharedInputs: true
+      })
+      .combine({
+        reducer2: ee.Reducer.median(),
+        sharedInputs: true
+      }),
+    geometry: region,
+    scale: 10,
+    maxPixels: 1e13
+  });
+
+  return ee.Feature(null, stats).set('Stretch', name);
+}
+
+// Create dynamic stats table
+var statsTable = ee.FeatureCollection([
+  makeStatsFeature(studyArea, 'Total Area'),
+  makeStatsFeature(upstream2, 'Upstream2'),
+  makeStatsFeature(upstream1, 'Upstream1'),
+  makeStatsFeature(middle, 'Middle'),
+  makeStatsFeature(downstream1, 'Downstream1'),
+  makeStatsFeature(downstream2, 'Downstream2')
+]);
+
+print('Dynamic NDTI Stats Table:', statsTable);
+
+// Export dynamic statistics as CSV
+Export.table.toDrive({
+  collection: statsTable, 
+  description: 'Yamuna_NDTI_Dynamic_Stretch_Stats_2025',
+  folder: 'GEE_Exports',
+  fileNamePrefix: 'Yamuna_NDTI_Dynamic_Stretch_Stats_2025',
+  fileFormat: 'CSV'
+});
+
+
+
+// Export NDTI raster as GeoTIFF
+Export.image.toDrive({
+  image: waterNDTI,
+  description: 'Yamuna_NDTI_2025',
+  folder: 'GEE_Exports',
+  fileNamePrefix: 'Yamuna_NDTI_2025',
+  region: studyArea,
+  scale: 10,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
+
+// Export hotspot raster as GeoTIFF
+Export.image.toDrive({
+  image: hotspots,
+  description: 'Yamuna_NDTI_Hotspots_2025',
+  folder: 'GEE_Exports',
+  fileNamePrefix: 'Yamuna_NDTI_Hotspots_2025',
+  region: studyArea,
+  scale: 10,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
+
+// Export True Sentinel Colours 2025 raster as GeoTIFF
+Export.image.toDrive({
+  image: image,
+  description: 'True Sentinel Colours 2025',
+  folder: 'GEE_Exports',
+  fileNamePrefix: 'True_Sentinel_Colours_2025',
+  region: studyArea,
+  scale: 10,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
