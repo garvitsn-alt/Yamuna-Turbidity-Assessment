@@ -152,6 +152,12 @@ Yamuna-Turbidity-Assessment/
 * Overlay of drains, STPs and industrial zones
 * Automated hotspot monitoring
 
+
+Outputs:
+- NDTI GeoTIFF raster generated in Google Earth Engine
+- Hotspot GeoTIFF raster generated in Google Earth Engine
+- Available upon request
+  
 ---
 
 ## Author
